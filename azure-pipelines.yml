@@ -10,6 +10,7 @@ pool:
   vmImage: 'macOS-latest'
 
 steps:
+- script: brew install opencv ffmpeg
 - script: ./build_mac.sh
   displayName: 'Run a one-line script'
 
