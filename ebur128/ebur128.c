@@ -7,6 +7,7 @@
 #include <math.h> /* You may have to define _USE_MATH_DEFINES if you use MSVC */
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 
 /* This can be replaced by any BSD-like queue implementation. */
 #include <sys/queue.h>
@@ -42,6 +43,40 @@ typedef struct {         /* Data structure for polyphase FIR interpolator */
   float** z;             /* List of delay buffers (one for each channel) */
   unsigned int zi;       /* Current delay buffer index */
 } interpolator;
+
+
+
+// Single threaded pool of dq entries.
+#define DQ_CACHE_NUM_ENTRIES 2048
+size_t dq_cache_free_start = 0;
+char dq_cache_in_use[DQ_CACHE_NUM_ENTRIES] = {0}; // TODO Bitset
+struct ebur128_dq_entry dq_cache[DQ_CACHE_NUM_ENTRIES];
+
+struct ebur128_dq_entry* dq_cache_alloc() {
+    for (size_t ii = dq_cache_free_start; ii < DQ_CACHE_NUM_ENTRIES; ii++) {
+        if (!dq_cache_in_use[ii]) {
+            dq_cache_in_use[ii] = 1;
+            dq_cache_free_start = ii + 1;
+            return &dq_cache[ii];
+        }
+    }
+    assert(0); // TODO Remove.
+    return malloc(sizeof(struct ebur128_dq_entry));
+}
+
+void dq_cache_free(struct ebur128_dq_entry* entry) {
+    if (entry >= &dq_cache[0] && entry <= &dq_cache[DQ_CACHE_NUM_ENTRIES - 1]) {
+        const size_t index = (size_t)(entry - &dq_cache[0]);
+        assert(dq_cache_in_use[index]);
+        dq_cache_in_use[index] = 0;
+        if (index < dq_cache_free_start) {
+            dq_cache_free_start = index;
+        }
+    } else {
+        free(entry);
+    }
+}
+
 
 /** BS.1770 filter state. */
 typedef double filter_state[FILTER_STATE_SIZE];
@@ -557,12 +592,12 @@ void ebur128_destroy(ebur128_state** st) {
   while (!STAILQ_EMPTY(&(*st)->d->block_list)) {
     entry = STAILQ_FIRST(&(*st)->d->block_list);
     STAILQ_REMOVE_HEAD(&(*st)->d->block_list, entries);
-    free(entry);
+    dq_cache_free(entry);
   }
   while (!STAILQ_EMPTY(&(*st)->d->short_term_block_list)) {
     entry = STAILQ_FIRST(&(*st)->d->short_term_block_list);
     STAILQ_REMOVE_HEAD(&(*st)->d->short_term_block_list, entries);
-    free(entry);
+    dq_cache_free(entry);
   }
   ebur128_destroy_resampler(*st);
   free((*st)->d);
@@ -755,7 +790,7 @@ static int ebur128_calc_gating_block(ebur128_state* st,
         STAILQ_REMOVE_HEAD(&st->d->block_list, entries);
       } else {
         block =
-            (struct ebur128_dq_entry*) malloc(sizeof(struct ebur128_dq_entry));
+          dq_cache_alloc();
         if (!block) {
           return EBUR128_ERROR_NOMEM;
         }
@@ -944,14 +979,14 @@ int ebur128_set_max_history(ebur128_state* st, unsigned long history) {
   while (st->d->block_list_size > st->d->block_list_max) {
     struct ebur128_dq_entry* block = STAILQ_FIRST(&st->d->block_list);
     STAILQ_REMOVE_HEAD(&st->d->block_list, entries);
-    free(block);
+    dq_cache_free(block);
     st->d->block_list_size--;
   }
   while (st->d->st_block_list_size > st->d->st_block_list_max) {
     struct ebur128_dq_entry* block =
         STAILQ_FIRST(&st->d->short_term_block_list);
     STAILQ_REMOVE_HEAD(&st->d->short_term_block_list, entries);
-    free(block);
+    dq_cache_free(block);
     st->d->st_block_list_size--;
   }
   return EBUR128_SUCCESS;
@@ -996,8 +1031,7 @@ static int ebur128_energy_shortterm(ebur128_state* st, double* out);
                   block = STAILQ_FIRST(&st->d->short_term_block_list);         \
                   STAILQ_REMOVE_HEAD(&st->d->short_term_block_list, entries);  \
                 } else {                                                       \
-                  block = (struct ebur128_dq_entry*) malloc(                   \
-                      sizeof(struct ebur128_dq_entry));                        \
+                  block = dq_cache_alloc();                       \
                   if (!block) {                                                \
                     return EBUR128_ERROR_NOMEM;                                \
                   }                                                            \
