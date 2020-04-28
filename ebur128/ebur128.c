@@ -47,7 +47,7 @@ typedef struct {         /* Data structure for polyphase FIR interpolator */
 
 
 // Single threaded pool of dq entries.
-#define DQ_CACHE_NUM_ENTRIES 2048
+#define DQ_CACHE_NUM_ENTRIES 4096
 size_t dq_cache_free_start = 0;
 char dq_cache_in_use[DQ_CACHE_NUM_ENTRIES] = {0}; // TODO Bitset
 struct ebur128_dq_entry dq_cache[DQ_CACHE_NUM_ENTRIES];
